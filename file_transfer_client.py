@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-支持文件传输的Socket客户端
+支持文件传输和代理连接的Socket客户端
 """
 
 import socket
@@ -8,25 +8,107 @@ import os
 import sys
 import threading
 import time
+import struct
 from pathlib import Path
 
+# 代理相关常量
+VRC_PROXY_STATUS_OK = 0
+VRC_PROXY_STATUS_CONNECT_ERR = 1
+
+class ProxyRequest:
+    """代理请求结构 - 对应C++的ProxyRequest"""
+    def __init__(self, target_ip, target_port):
+        # 确保IP地址是16字节，不足的用空字符填充
+        self.target_ip = target_ip.ljust(16, '\0')[:16]
+        self.target_port = target_port
+    
+    def pack(self):
+        """打包为二进制数据发送给代理"""
+        return struct.pack('16sH', self.target_ip.encode('utf-8'), self.target_port)
+
+class ProxyResponse:
+    """代理响应结构 - 对应C++的ProxyResponse"""
+    def __init__(self, data):
+        if len(data) != 102:  # 2 + 100 bytes
+            raise ValueError(f"Expected 102 bytes, got {len(data)}")
+        
+        self.status, msg_bytes = struct.unpack('H100s', data)
+        # 移除空字符并解码消息
+        self.msg = msg_bytes.decode('utf-8', errors='ignore').rstrip('\0')
+    
+    def is_success(self):
+        return self.status == VRC_PROXY_STATUS_OK
+
 class FileTransferClient:
-    def __init__(self, host='localhost', port=8080):
+    def __init__(self, host='localhost', port=8080, proxy_host=None, proxy_port=None):
         self.host = host
         self.port = port
+        self.proxy_host = proxy_host
+        self.proxy_port = proxy_port
         self.socket = None
         self.connected = False
+        self.using_proxy = proxy_host is not None and proxy_port is not None
         
     def connect(self):
-        """连接到服务器"""
+        """连接到服务器（直接连接或通过代理）"""
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((self.host, self.port))
-            self.connected = True
-            print(f"✅ 成功连接到服务器 {self.host}:{self.port}")
-            return True
+            
+            if self.using_proxy:
+                return self._connect_via_proxy()
+            else:
+                return self._connect_direct()
+                
         except Exception as e:
             print(f"❌ 连接失败: {e}")
+            return False
+    
+    def _connect_direct(self):
+        """直接连接到服务器"""
+        try:
+            self.socket.connect((self.host, self.port))
+            self.connected = True
+            print(f"✅ 成功直接连接到服务器 {self.host}:{self.port}")
+            return True
+        except Exception as e:
+            print(f"❌ 直接连接失败: {e}")
+            return False
+    
+    def _connect_via_proxy(self):
+        """通过代理连接到服务器"""
+        try:
+            # 1. 连接到代理服务器
+            print(f"🔄 正在连接到代理服务器 {self.proxy_host}:{self.proxy_port}")
+            self.socket.connect((self.proxy_host, self.proxy_port))
+            
+            # 2. 发送代理请求
+            proxy_request = ProxyRequest(self.host, self.port)
+            request_data = proxy_request.pack()
+            
+            print(f"📡 发送代理请求: {self.host}:{self.port}")
+            self.socket.send(request_data)
+            
+            # 3. 接收代理响应
+            response_data = self.socket.recv(102)  # ProxyResponse大小固定为102字节
+            if len(response_data) != 102:
+                print(f"❌ 代理响应长度错误: 期望102字节，收到{len(response_data)}字节")
+                return False
+            
+            proxy_response = ProxyResponse(response_data)
+            
+            # 4. 检查代理连接状态
+            if proxy_response.is_success():
+                self.connected = True
+                print(f"✅ 成功通过代理连接到服务器 {self.host}:{self.port}")
+                print(f"📝 代理响应: {proxy_response.msg}")
+                return True
+            else:
+                print(f"❌ 代理连接失败 (状态码: {proxy_response.status})")
+                print(f"📝 错误信息: {proxy_response.msg}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 代理连接失败: {e}")
             return False
     
     def disconnect(self):
@@ -227,17 +309,56 @@ def print_help():
     print("💡 提示: 输入其他文本将直接发送给服务器")
     print("=" * 45)
 
+def print_usage():
+    """显示使用说明"""
+    print("使用方法:")
+    print("  python file_transfer_client.py [目标主机] [目标端口] [代理主机] [代理端口]")
+    print("")
+    print("参数:")
+    print("  目标主机    - 目标服务器IP地址 (默认: localhost)")
+    print("  目标端口    - 目标服务器端口 (默认: 8080)")
+    print("  代理主机    - 代理服务器IP地址 (可选)")
+    print("  代理端口    - 代理服务器端口 (可选)")
+    print("")
+    print("示例:")
+    print("  # 直接连接")
+    print("  python file_transfer_client.py 192.168.1.100 8080")
+    print("")
+    print("  # 通过代理连接")
+    print("  python file_transfer_client.py 192.168.1.100 8080 192.168.1.50 9999")
+    print("")
+    print("💡 如果指定了代理，所有通信将通过代理服务器转发")
+
 def main():
     print("🚀 文件传输客户端")
     print("=" * 30)
+    
+    # 检查是否需要显示帮助
+    if len(sys.argv) > 1 and sys.argv[1] in ['-h', '--help', 'help']:
+        print_usage()
+        sys.exit(0)
     
     # 解析命令行参数
     host = sys.argv[1] if len(sys.argv) > 1 else 'localhost'
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
     
-    client = FileTransferClient(host, port)
+    # 可选的代理参数
+    proxy_host = sys.argv[3] if len(sys.argv) > 3 else None
+    proxy_port = int(sys.argv[4]) if len(sys.argv) > 4 else None
+    
+    # 显示连接信息
+    if proxy_host and proxy_port:
+        print(f"🎯 目标服务器: {host}:{port}")
+        print(f"🔄 代理服务器: {proxy_host}:{proxy_port}")
+        print("📡 将通过代理连接到目标服务器")
+    else:
+        print(f"🎯 目标服务器: {host}:{port}")
+        print("🔗 将直接连接到服务器")
+    
+    client = FileTransferClient(host, port, proxy_host, proxy_port)
     
     if not client.connect():
+        print("\n💡 提示: 使用 --help 查看使用说明")
         sys.exit(1)
     
     print("🎯 连接成功！输入 'help' 或 'h' 查看命令")
