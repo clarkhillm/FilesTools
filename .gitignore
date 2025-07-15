@@ -1,0 +1,28 @@
+# 构建脚本
+build/
+bin/
+*.exe
+
+# IDE文件
+.vs/
+.vscode/
+*.vcxproj*
+*.sln
+
+# 编译产物
+*.o
+*.obj
+*.lib
+*.a
+*.so
+*.dll
+
+# CMake生成的文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# 其他
+*.log
+*.tmp

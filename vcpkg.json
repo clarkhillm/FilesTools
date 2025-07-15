@@ -1,0 +1,11 @@
+{
+  "name": "socket-server",
+  "version-string": "1.0.0",
+  "description": "A simple C++14 socket server with spdlog logging",
+  "dependencies": [
+    {
+      "name": "spdlog",
+      "version>=": "1.12.0"
+    }
+  ]
+}
