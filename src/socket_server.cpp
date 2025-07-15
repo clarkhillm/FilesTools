@@ -464,7 +464,23 @@ std::string SocketServer::getFilePath(const std::string& filename) {
         safeName.erase(pos, 2);
     }
     
-    return m_fileDirectory + "/" + safeName;
+    // 构造完整文件路径
+    std::string fullPath = m_fileDirectory + "/" + safeName;
+    
+    // 确保父目录存在
+    std::filesystem::path filePath(fullPath);
+    std::filesystem::path parentDir = filePath.parent_path();
+    
+    try {
+        if (!std::filesystem::exists(parentDir)) {
+            std::filesystem::create_directories(parentDir);
+            logInfo("Created directory: " + parentDir.string());
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        logError("Failed to create directory: " + parentDir.string() + " - " + e.what());
+    }
+    
+    return fullPath;
 }
 
 bool SocketServer::receiveFileData(SOCKET clientSocket, const std::string& filepath, size_t fileSize) {

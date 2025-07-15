@@ -142,6 +142,10 @@ class FileTransferClient:
             print("❌ 未连接到服务器")
             return False
         
+        # 检查是否是文件夹
+        if os.path.isdir(local_file_path):
+            return self.upload_folder(local_file_path)
+        
         if not os.path.exists(local_file_path):
             print(f"❌ 文件不存在: {local_file_path}")
             return False
@@ -190,6 +194,120 @@ class FileTransferClient:
             
         except Exception as e:
             print(f"❌ 上传文件失败: {e}")
+            return False
+    
+    def upload_folder(self, folder_path):
+        """上传整个文件夹到服务器"""
+        if not self.connected:
+            print("❌ 未连接到服务器")
+            return False
+        
+        if not os.path.isdir(folder_path):
+            print(f"❌ 文件夹不存在: {folder_path}")
+            return False
+        
+        try:
+            # 获取文件夹名称
+            folder_name = os.path.basename(os.path.abspath(folder_path))
+            
+            # 收集所有文件
+            files_to_upload = []
+            total_size = 0
+            
+            print(f"📁 正在扫描文件夹: {folder_name}")
+            
+            for root, dirs, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    # 计算相对路径以保持目录结构
+                    relative_path = os.path.relpath(file_path, folder_path)
+                    # 使用正斜杠作为路径分隔符（跨平台兼容）
+                    relative_path = relative_path.replace('\\', '/')
+                    server_filename = f"{folder_name}/{relative_path}"
+                    
+                    file_size = os.path.getsize(file_path)
+                    files_to_upload.append((file_path, server_filename, file_size))
+                    total_size += file_size
+            
+            if not files_to_upload:
+                print(f"❌ 文件夹为空: {folder_path}")
+                return False
+            
+            print(f"📊 发现 {len(files_to_upload)} 个文件，总大小: {total_size} bytes")
+            
+            # 询问用户确认
+            response = input(f"确认上传文件夹 '{folder_name}' 吗? (y/N): ").strip().lower()
+            if response not in ['y', 'yes', '是']:
+                print("❌ 用户取消上传")
+                return False
+            
+            # 上传所有文件
+            successful_uploads = 0
+            failed_uploads = 0
+            
+            for i, (local_path, server_filename, file_size) in enumerate(files_to_upload, 1):
+                print(f"\n📤 上传文件 {i}/{len(files_to_upload)}: {server_filename}")
+                
+                if self._upload_single_file(local_path, server_filename, file_size):
+                    successful_uploads += 1
+                else:
+                    failed_uploads += 1
+                    print(f"❌ 文件上传失败: {server_filename}")
+            
+            # 显示上传结果
+            print(f"\n📊 文件夹上传完成:")
+            print(f"  ✅ 成功: {successful_uploads} 个文件")
+            if failed_uploads > 0:
+                print(f"  ❌ 失败: {failed_uploads} 个文件")
+            
+            return failed_uploads == 0
+            
+        except Exception as e:
+            print(f"❌ 上传文件夹失败: {e}")
+            return False
+    
+    def _upload_single_file(self, local_file_path, server_filename, file_size):
+        """上传单个文件（内部使用）"""
+        try:
+            # 发送上传命令
+            upload_command = f"FILE:UPLOAD:{server_filename}:{file_size}"
+            self.socket.send(upload_command.encode('utf-8'))
+            
+            # 等待服务器确认
+            response = self.socket.recv(1024).decode('utf-8')
+            if "READY" not in response:
+                print(f"❌ 服务器不准备接收文件: {response}")
+                return False
+            
+            # 发送文件数据
+            with open(local_file_path, 'rb') as file:
+                bytes_sent = 0
+                buffer_size = 8192
+                
+                while bytes_sent < file_size:
+                    data = file.read(buffer_size)
+                    if not data:
+                        break
+                    
+                    self.socket.send(data)
+                    bytes_sent += len(data)
+                    
+                    # 显示进度
+                    progress = (bytes_sent / file_size) * 100
+                    print(f"  📊 进度: {progress:.1f}% ({bytes_sent}/{file_size} bytes)", end='\r')
+            
+            print(f"  ✅ 完成: {server_filename}")
+            
+            # 接收最终确认
+            final_response = self.socket.recv(1024).decode('utf-8')
+            if "SUCCESS" not in final_response:
+                print(f"  ❌ 服务器错误: {final_response.strip()}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"  ❌ 上传失败: {e}")
             return False
     
     def download_file(self, filename, local_dir="./downloads"):
@@ -296,7 +414,7 @@ def print_help():
     """显示帮助信息"""
     print("\n📋 可用命令:")
     print("文件操作:")
-    print("  📤 up <文件>         - 上传文件 (别名: upload, u)")
+    print("  📤 up <路径>         - 上传文件或文件夹 (别名: upload, u)")
     print("  📥 down <文件>       - 下载文件 (别名: download, d)")
     print("  📂 ls               - 列出文件 (别名: list, l)")
     print("")
@@ -306,8 +424,11 @@ def print_help():
     print("  ❓ help             - 显示帮助 (别名: h, ?)")
     print("  🚪 quit             - 退出程序 (别名: exit, q)")
     print("")
-    print("💡 提示: 输入其他文本将直接发送给服务器")
-    print("=" * 45)
+    print("💡 提示:")
+    print("  - 上传文件: up myfile.txt")
+    print("  - 上传文件夹: up ./documents (保持目录结构)")
+    print("  - 输入其他文本将直接发送给服务器")
+    print("=" * 50)
 
 def print_usage():
     """显示使用说明"""
@@ -386,9 +507,9 @@ def main():
             # 上传命令 (支持多种别名)
             elif command in ['upload', 'up', 'u']:
                 if len(parts) < 2:
-                    print("❌ 请指定要上传的文件")
-                    print("💡 用法: up <文件路径>")
-                    print("📝 例如: up test.txt 或 up ./documents/file.pdf")
+                    print("❌ 请指定要上传的文件或文件夹")
+                    print("💡 用法: up <文件路径或文件夹路径>")
+                    print("📝 例如: up test.txt 或 up ./documents")
                 else:
                     file_path = ' '.join(parts[1:])  # 支持带空格的文件名
                     client.upload_file(file_path)
