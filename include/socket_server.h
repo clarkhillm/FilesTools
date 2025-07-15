@@ -27,6 +27,7 @@
     #include <spdlog/spdlog.h>
     #include <spdlog/sinks/stdout_color_sinks.h>
     #include <spdlog/sinks/basic_file_sink.h>
+    #include <spdlog/sinks/rotating_file_sink.h>
 #endif
 
 class SocketServer {
@@ -59,6 +60,7 @@ private:
     bool initializeSocket();
     void cleanup();
     void setupLogger();
+    void createLogDirectory();
     void handleClient(SOCKET clientSocket);
     std::string receiveMessage(SOCKET clientSocket);
     bool sendMessage(SOCKET clientSocket, const std::string& message);

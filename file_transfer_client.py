@@ -212,21 +212,24 @@ class FileTransferClient:
 
 def print_help():
     """显示帮助信息"""
-    print("\n=== 文件传输客户端帮助 ===")
-    print("命令:")
-    print("  upload <文件路径>     - 上传文件到服务器")
-    print("  download <文件名>     - 从服务器下载文件")
-    print("  list                 - 列出服务器文件")
-    print("  hello                - 发送问候消息")
-    print("  time                 - 获取服务器时间")
-    print("  help                 - 显示帮助信息")
-    print("  quit/exit            - 退出客户端")
-    print("  其他文本             - 发送普通消息")
-    print("========================\n")
+    print("\n📋 可用命令:")
+    print("文件操作:")
+    print("  📤 up <文件>         - 上传文件 (别名: upload, u)")
+    print("  📥 down <文件>       - 下载文件 (别名: download, d)")
+    print("  📂 ls               - 列出文件 (别名: list, l)")
+    print("")
+    print("其他命令:")
+    print("  💬 hello            - 服务器问候")
+    print("  🕒 time             - 服务器时间")
+    print("  ❓ help             - 显示帮助 (别名: h, ?)")
+    print("  🚪 quit             - 退出程序 (别名: exit, q)")
+    print("")
+    print("💡 提示: 输入其他文本将直接发送给服务器")
+    print("=" * 45)
 
 def main():
-    print("🚀 Socket文件传输客户端")
-    print("=" * 40)
+    print("🚀 文件传输客户端")
+    print("=" * 30)
     
     # 解析命令行参数
     host = sys.argv[1] if len(sys.argv) > 1 else 'localhost'
@@ -237,7 +240,7 @@ def main():
     if not client.connect():
         sys.exit(1)
     
-    print("🎯 连接成功！输入 'help' 查看可用命令")
+    print("🎯 连接成功！输入 'help' 或 'h' 查看命令")
     
     try:
         while client.connected:
@@ -249,29 +252,70 @@ def main():
             parts = user_input.split()
             command = parts[0].lower()
             
-            if command in ['quit', 'exit']:
-                client.send_message(user_input)
+            # 退出命令 (支持多种别名)
+            if command in ['quit', 'exit', 'q']:
+                print("👋 正在断开连接...")
+                client.send_message("quit")
                 break
-            elif command == 'help':
+                
+            # 帮助命令 (支持多种别名)
+            elif command in ['help', 'h', '?']:
                 print_help()
-            elif command == 'upload':
+                
+            # 上传命令 (支持多种别名)
+            elif command in ['upload', 'up', 'u']:
                 if len(parts) < 2:
-                    print("❌ 请指定要上传的文件路径")
-                    print("用法: upload <文件路径>")
+                    print("❌ 请指定要上传的文件")
+                    print("💡 用法: up <文件路径>")
+                    print("📝 例如: up test.txt 或 up ./documents/file.pdf")
                 else:
                     file_path = ' '.join(parts[1:])  # 支持带空格的文件名
                     client.upload_file(file_path)
-            elif command == 'download':
+                    
+            # 下载命令 (支持多种别名)
+            elif command in ['download', 'down', 'd']:
                 if len(parts) < 2:
                     print("❌ 请指定要下载的文件名")
-                    print("用法: download <文件名>")
+                    print("💡 用法: down <文件名>")
+                    print("📝 例如: down test.txt")
                 else:
                     filename = parts[1]
                     client.download_file(filename)
-            elif command == 'list':
+                    
+            # 列表命令 (支持多种别名)
+            elif command in ['list', 'ls', 'l']:
                 client.list_files()
-            else:
+                
+            # 其他已知命令
+            elif command in ['hello', 'time']:
                 client.send_message(user_input)
+                
+            # 未知命令处理
+            else:
+                # 如果输入看起来像是错误的命令，给出提示
+                if len(parts) == 1 and len(command) > 1:
+                    similar_commands = {
+                        'upload': ['up', 'u'],
+                        'download': ['down', 'd'], 
+                        'list': ['ls', 'l'],
+                        'help': ['h', '?'],
+                        'quit': ['q', 'exit']
+                    }
+                    
+                    suggestions = []
+                    for cmd, aliases in similar_commands.items():
+                        if command.startswith(cmd[:2]) or command in aliases:
+                            suggestions.append(f"'{cmd}' 或 '{aliases[0]}'")
+                    
+                    if suggestions:
+                        print(f"❓ 未知命令 '{command}'，您是否想输入: {', '.join(suggestions)}?")
+                        print("💡 输入 'h' 查看所有可用命令")
+                    else:
+                        print(f"📨 发送消息: {user_input}")
+                        client.send_message(user_input)
+                else:
+                    print(f"📨 发送消息: {user_input}")
+                    client.send_message(user_input)
                 
     except KeyboardInterrupt:
         print("\n👋 用户中断，正在退出...")

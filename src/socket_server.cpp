@@ -144,7 +144,32 @@ void SocketServer::setLogLevel(spdlog::level::level_enum level) {
 void SocketServer::setupLogger() {
 #ifdef USE_SPDLOG
     try {
-        // 创建控制台和文件sink
+#ifdef NDEBUG
+        // Release build: setup rotating file logger
+        createLogDirectory();
+        
+        // Create rotating file logger with size-based rotation
+        auto max_size = 1048576 * 10; // 10MB
+        auto max_files = 10;
+        auto rotating_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>("log/server.log", max_size, max_files);
+        
+        // Set pattern with timestamp, level, and message
+        rotating_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] [thread %t] %v");
+        rotating_sink->set_level(spdlog::level::info);
+        
+        // Create logger with rotating file sink
+        std::vector<spdlog::sink_ptr> sinks {rotating_sink};
+        m_logger = std::make_shared<spdlog::logger>("SocketServer", sinks.begin(), sinks.end());
+        
+        m_logger->set_level(spdlog::level::info);
+        m_logger->flush_on(spdlog::level::info);
+        
+        // Register logger
+        spdlog::register_logger(m_logger);
+        
+        logInfo("Logger initialized with rotating file logger");
+#else
+        // Debug build: setup console and file logger
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("socket_server.log", true);
         
@@ -165,11 +190,22 @@ void SocketServer::setupLogger() {
         // 注册logger
         spdlog::register_logger(m_logger);
         
-        logInfo("Logger initialized successfully");
+        logInfo("Logger initialized with console and file logger");
+#endif
     } catch (const spdlog::spdlog_ex& ex) {
         std::cerr << "Log initialization failed: " << ex.what() << std::endl;
     }
 #endif
+}
+
+void SocketServer::createLogDirectory() {
+    try {
+        if (!std::filesystem::exists("log")) {
+            std::filesystem::create_directory("log");
+        }
+    } catch (const std::filesystem::filesystem_error& ex) {
+        std::cerr << "Failed to create log directory: " << ex.what() << std::endl;
+    }
 }
 
 void SocketServer::logInfo(const std::string& message) {
@@ -296,12 +332,26 @@ void SocketServer::handleFileCommand(SOCKET clientSocket, const std::string& com
         parts.push_back(item);
     }
     
-    if (parts.size() < 3) {
+    if (parts.size() < 2) {
         sendMessage(clientSocket, "ERROR: Invalid file command format\n");
         return;
     }
     
     std::string action = parts[1];
+    
+    // LIST命令不需要文件名
+    if (action == "LIST") {
+        logInfo("File list request");
+        sendFileList(clientSocket);
+        return;
+    }
+    
+    // 其他命令需要文件名
+    if (parts.size() < 3) {
+        sendMessage(clientSocket, "ERROR: Invalid file command format\n");
+        return;
+    }
+    
     std::string filename = parts[2];
     
     if (action == "UPLOAD") {
@@ -327,10 +377,6 @@ void SocketServer::handleFileCommand(SOCKET clientSocket, const std::string& com
         } else {
             sendMessage(clientSocket, "ERROR: File not found or download failed\n");
         }
-    }
-    else if (action == "LIST") {
-        logInfo("File list request");
-        sendFileList(clientSocket);
     }
     else {
         sendMessage(clientSocket, "ERROR: Unknown file action\n");
