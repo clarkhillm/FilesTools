@@ -26,3 +26,5 @@ Makefile
 # 其他
 *.log
 *.tmp
+
+downloads/
