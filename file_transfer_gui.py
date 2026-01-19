@@ -493,88 +493,238 @@ class FileTransferGUI:
         self.log("📋 正在获取文件列表...", "info")
         
         def list_thread():
-            import io
-            import sys
-            old_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-            
-            self.client.list_files()
-            
-            output = sys.stdout.getvalue()
-            sys.stdout = old_stdout
-            
-            self.root.after(0, lambda: self.log(output))
+            try:
+                # 发送列表命令
+                self.client.socket.send("FILE:LIST".encode('utf-8'))
+                
+                # 接收文件列表 - 使用更大的缓冲区并循环接收
+                response_data = b''
+                while True:
+                    try:
+                        chunk = self.client.socket.recv(8192)
+                        if not chunk:
+                            break
+                        response_data += chunk
+                        # 检查是否接收完整
+                        if b'END_LIST\n' in response_data or b'END_LIST\r\n' in response_data:
+                            break
+                    except:
+                        break
+                
+                # 使用容错解码
+                response = response_data.decode('utf-8', errors='replace')
+                
+                if response.startswith("FILE_LIST:"):
+                    output = "📜 服务器文件列表:\n"
+                    output += "=" * 50 + "\n"
+                    
+                    lines = response.split('\n')
+                    file_count = 0
+                    
+                    for line in lines[1:]:  # 跳过第一行 "FILE_LIST:"
+                        if line.strip() == "END_LIST":
+                            break
+                        if line.strip():
+                            parts = line.split(':')
+                            if len(parts) >= 2:
+                                filename = parts[0]
+                                file_size = parts[1]
+                                output += f"📄 {filename} ({file_size} bytes)\n"
+                                file_count += 1
+                    
+                    output += "=" * 50 + "\n"
+                    output += f"总共 {file_count} 个文件"
+                else:
+                    output = "❌ 获取文件列表失败"
+                
+                self.root.after(0, lambda: self.log(output, "info"))
+                
+            except Exception as e:
+                self.root.after(0, lambda: self.log(f"❌ 列出文件失败: {e}", "error"))
         
         threading.Thread(target=list_thread, daemon=True).start()
         
     def download_file(self):
         """下载文件"""
-        # 弹出对话框让用户输入文件名
-        filename = tk.simpledialog.askstring("下载文件", "请输入要下载的文件名:")
+        # 先获取服务器文件列表
+        self.log("📋 正在获取服务器文件列表...", "info")
         
-        if filename:
-            save_dir = filedialog.askdirectory(title="选择保存位置")
+        try:
+            # 发送列表命令
+            self.client.socket.send("FILE:LIST".encode('utf-8'))
             
-            if save_dir:
-                self.log(f"📥 准备下载文件: {filename}", "info")
-                self.reset_progress()
+            # 接收文件列表 - 使用更大的缓冲区并循环接收
+            response_data = b''
+            while True:
+                try:
+                    chunk = self.client.socket.recv(8192)
+                    if not chunk:
+                        break
+                    response_data += chunk
+                    # 检查是否接收完整（包含 END_LIST\n）
+                    if b'END_LIST\n' in response_data or b'END_LIST\r\n' in response_data:
+                        break
+                except:
+                    break
+            
+            # 使用容错解码
+            response = response_data.decode('utf-8', errors='replace')
+            
+            if not response.startswith("FILE_LIST:"):
+                messagebox.showerror("错误", "无法获取文件列表")
+                return
+            
+            # 解析文件列表
+            files = []
+            lines = response.split('\n')
+            for line in lines[1:]:  # 跳过第一行 "FILE_LIST:"
+                if line.strip() == "END_LIST":
+                    break
+                if line.strip():
+                    parts = line.split(':')
+                    if len(parts) >= 2:
+                        filename = parts[0]
+                        file_size = parts[1]
+                        files.append(f"{filename} ({file_size} bytes)")
+            
+            if not files:
+                messagebox.showinfo("提示", "服务器上没有文件")
+                return
+            
+            # 创建文件选择对话框
+            selection_window = tk.Toplevel(self.root)
+            selection_window.title("选择要下载的文件")
+            selection_window.geometry("600x450")
+            selection_window.transient(self.root)
+            selection_window.grab_set()
+            
+            # 标题
+            ttk.Label(selection_window, text="请选择要下载的文件:", font=("Arial", 10, "bold")).pack(pady=10)
+            
+            # 文件列表框
+            list_frame = ttk.Frame(selection_window)
+            list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+            
+            scrollbar = ttk.Scrollbar(list_frame)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            listbox = tk.Listbox(
+                list_frame,
+                yscrollcommand=scrollbar.set,
+                font=("Consolas", 9),
+                selectmode=tk.SINGLE
+            )
+            listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.config(command=listbox.yview)
+            
+            # 填充文件列表
+            for file in files:
+                listbox.insert(tk.END, file)
+            
+            # 按钮区域
+            btn_frame = ttk.Frame(selection_window)
+            btn_frame.pack(fill=tk.X, padx=10, pady=10)
+            
+            selected_file = [None]  # 使用列表来存储选择结果
+            
+            def on_download():
+                selection = listbox.curselection()
+                if not selection:
+                    messagebox.showwarning("提示", "请先选择一个文件")
+                    return
                 
-                def download_thread():
-                    try:
-                        # 发送下载命令
-                        download_command = f"FILE:DOWNLOAD:{filename}"
-                        self.client.socket.send(download_command.encode('utf-8'))
-                        
-                        # 接收文件信息
-                        response = self.client.socket.recv(1024).decode('utf-8')
-                        
-                        if response.startswith("ERROR"):
-                            self.root.after(0, lambda: self.log(f"❌ 下载失败: {response}", "error"))
-                            self.root.after(0, self.reset_progress)
-                            return
-                        
-                        if not response.startswith("FILE_INFO:"):
-                            self.root.after(0, lambda: self.log(f"❌ 意外的服务器响应: {response}", "error"))
-                            self.root.after(0, self.reset_progress)
-                            return
-                        
-                        # 解析文件大小
-                        file_size = int(response.split(':')[1].strip())
-                        self.root.after(0, lambda: self.log(f"📋 文件大小: {file_size} bytes", "info"))
-                        
-                        # 发送准备确认
-                        self.client.socket.send("READY".encode('utf-8'))
-                        
-                        # 接收文件数据
-                        local_file_path = os.path.join(save_dir, filename)
-                        bytes_received = 0
-                        
-                        with open(local_file_path, 'wb') as file:
-                            while bytes_received < file_size:
-                                remaining = file_size - bytes_received
-                                buffer_size = min(8192, remaining)
-                                
-                                data = self.client.socket.recv(buffer_size)
-                                if not data:
-                                    break
-                                
-                                file.write(data)
-                                bytes_received += len(data)
-                                
-                                # 更新进度
-                                progress = (bytes_received / file_size) * 100
-                                self.root.after(0, lambda p=progress, r=bytes_received, t=file_size:
-                                              self.update_progress(p, f"下载: {filename} ({p:.1f}% - {r}/{t} bytes)"))
-                        
-                        self.root.after(0, lambda: self.log(f"✅ 文件下载成功: {local_file_path}", "success"))
-                        self.root.after(0, lambda: self.update_progress(100, f"下载完成: {filename}"))
-                        self.root.after(0, lambda: messagebox.showinfo("成功", f"文件下载成功！\n保存到: {local_file_path}"))
-                        
-                    except Exception as e:
-                        self.root.after(0, lambda: self.log(f"❌ 下载文件失败: {e}", "error"))
-                        self.root.after(0, self.reset_progress)
+                # 提取文件名（去掉大小信息）
+                selected_text = listbox.get(selection[0])
+                filename = selected_text.split(' (')[0]
+                selected_file[0] = filename
+                selection_window.destroy()
+            
+            def on_cancel():
+                selection_window.destroy()
+            
+            # 双击列表项也可以下载
+            def on_double_click(event):
+                on_download()
+            
+            listbox.bind("<Double-Button-1>", on_double_click)
+            
+            ttk.Button(btn_frame, text="📥 下载", command=on_download).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="❌ 取消", command=on_cancel).pack(side=tk.LEFT, padx=5)
+            
+            # 等待窗口关闭
+            self.root.wait_window(selection_window)
+            
+            # 如果用户选择了文件，开始下载
+            if selected_file[0]:
+                filename = selected_file[0]
+                save_dir = filedialog.askdirectory(title="选择保存位置")
                 
-                threading.Thread(target=download_thread, daemon=True).start()
+                if save_dir:
+                    self.log(f"📥 准备下载文件: {filename}", "info")
+                    self.reset_progress()
+                    
+                    def download_thread():
+                        try:
+                            # 发送下载命令
+                            download_command = f"FILE:DOWNLOAD:{filename}"
+                            self.client.socket.send(download_command.encode('utf-8'))
+                            
+                            # 接收文件信息
+                            response = self.client.socket.recv(1024).decode('utf-8')
+                            
+                            if response.startswith("ERROR"):
+                                self.root.after(0, lambda: self.log(f"❌ 下载失败: {response}", "error"))
+                                self.root.after(0, self.reset_progress)
+                                return
+                            
+                            if not response.startswith("FILE_INFO:"):
+                                self.root.after(0, lambda: self.log(f"❌ 意外的服务器响应: {response}", "error"))
+                                self.root.after(0, self.reset_progress)
+                                return
+                            
+                            # 解析文件大小
+                            file_size = int(response.split(':')[1].strip())
+                            self.root.after(0, lambda: self.log(f"📋 文件大小: {file_size} bytes", "info"))
+                            
+                            # 发送准备确认
+                            self.client.socket.send("READY".encode('utf-8'))
+                            
+                            # 接收文件数据
+                            local_file_path = os.path.join(save_dir, os.path.basename(filename))
+                            bytes_received = 0
+                            
+                            with open(local_file_path, 'wb') as file:
+                                while bytes_received < file_size:
+                                    remaining = file_size - bytes_received
+                                    buffer_size = min(8192, remaining)
+                                    
+                                    data = self.client.socket.recv(buffer_size)
+                                    if not data:
+                                        break
+                                    
+                                    file.write(data)
+                                    bytes_received += len(data)
+                                    
+                                    # 更新进度
+                                    progress = (bytes_received / file_size) * 100
+                                    fn = os.path.basename(filename)
+                                    self.root.after(0, lambda p=progress, r=bytes_received, t=file_size, fname=fn:
+                                                  self.update_progress(p, f"下载: {fname} ({p:.1f}% - {r}/{t} bytes)"))
+                            
+                            self.root.after(0, lambda: self.log(f"✅ 文件下载成功: {local_file_path}", "success"))
+                            fn = os.path.basename(filename)
+                            self.root.after(0, lambda fname=fn: self.update_progress(100, f"下载完成: {fname}"))
+                            self.root.after(0, lambda path=local_file_path: messagebox.showinfo("成功", f"文件下载成功！\n保存到: {path}"))
+                            
+                        except Exception as e:
+                            self.root.after(0, lambda err=str(e): self.log(f"❌ 下载文件失败: {err}", "error"))
+                            self.root.after(0, self.reset_progress)
+                    
+                    threading.Thread(target=download_thread, daemon=True).start()
+                    
+        except Exception as e:
+            self.log(f"❌ 获取文件列表失败: {e}", "error")
+            messagebox.showerror("错误", f"获取文件列表失败: {e}")
 
             
     def on_closing(self):

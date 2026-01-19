@@ -13,9 +13,12 @@
 std::wstring SocketServer::utf8ToWide(const std::string& utf8str) {
     if (utf8str.empty()) return std::wstring();
     
-    int wchars_num = MultiByteToWideChar(CP_UTF8, 0, utf8str.c_str(), -1, NULL, 0);
+    // 不包含null终止符的长度
+    int wchars_num = MultiByteToWideChar(CP_UTF8, 0, utf8str.c_str(), static_cast<int>(utf8str.size()), NULL, 0);
+    if (wchars_num == 0) return std::wstring();
+    
     std::wstring wstr(wchars_num, 0);
-    MultiByteToWideChar(CP_UTF8, 0, utf8str.c_str(), -1, &wstr[0], wchars_num);
+    MultiByteToWideChar(CP_UTF8, 0, utf8str.c_str(), static_cast<int>(utf8str.size()), &wstr[0], wchars_num);
     return wstr;
 }
 
@@ -23,9 +26,12 @@ std::wstring SocketServer::utf8ToWide(const std::string& utf8str) {
 std::string SocketServer::wideToUtf8(const std::wstring& wstr) {
     if (wstr.empty()) return std::string();
     
-    int utf8_size = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+    // 不包含null终止符的长度
+    int utf8_size = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), NULL, 0, NULL, NULL);
+    if (utf8_size == 0) return std::string();
+    
     std::string utf8str(utf8_size, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &utf8str[0], utf8_size, NULL, NULL);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &utf8str[0], utf8_size, NULL, NULL);
     return utf8str;
 }
 #endif
@@ -459,9 +465,16 @@ bool SocketServer::sendFileList(SOCKET clientSocket) {
             // 递归遍历所有文件，包括子目录
             for (const auto& entry : std::filesystem::recursive_directory_iterator(m_fileDirectory)) {
                 if (entry.is_regular_file()) {
-                    // 使用u8string()确保UTF-8编码正确
                     std::filesystem::path relativePath = std::filesystem::relative(entry.path(), m_fileDirectory);
+                    
+                    // Windows下需要将路径转换为UTF-8
+#ifdef _WIN32
+                    std::wstring wpath = relativePath.wstring();
+                    std::string filename = wideToUtf8(wpath);
+#else
                     std::string filename = relativePath.string();
+#endif
+                    
                     // 统一使用正斜杠作为路径分隔符
                     std::replace(filename.begin(), filename.end(), '\\', '/');
                     size_t fileSize = entry.file_size();
