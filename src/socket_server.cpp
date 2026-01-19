@@ -5,6 +5,30 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <locale>
+#include <codecvt>
+
+#ifdef _WIN32
+// Windows下UTF-8字符串转换为宽字符串
+std::wstring SocketServer::utf8ToWide(const std::string& utf8str) {
+    if (utf8str.empty()) return std::wstring();
+    
+    int wchars_num = MultiByteToWideChar(CP_UTF8, 0, utf8str.c_str(), -1, NULL, 0);
+    std::wstring wstr(wchars_num, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8str.c_str(), -1, &wstr[0], wchars_num);
+    return wstr;
+}
+
+// Windows下宽字符串转换为UTF-8
+std::string SocketServer::wideToUtf8(const std::wstring& wstr) {
+    if (wstr.empty()) return std::string();
+    
+    int utf8_size = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+    std::string utf8str(utf8_size, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &utf8str[0], utf8_size, NULL, NULL);
+    return utf8str;
+}
+#endif
 
 SocketServer::SocketServer(int port, const std::string& fileDir) 
     : m_port(port)
@@ -396,8 +420,14 @@ bool SocketServer::handleFileUpload(SOCKET clientSocket, const std::string& file
 bool SocketServer::handleFileDownload(SOCKET clientSocket, const std::string& filename) {
     std::string filepath = getFilePath(filename);
     
-    // 检查文件是否存在
+    // 检查文件是否存在（Windows下使用宽字符路径确保UTF-8支持）
+#ifdef _WIN32
+    std::wstring wpath = utf8ToWide(filepath);
+    std::ifstream file(wpath, std::ios::binary | std::ios::ate);
+#else
     std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+#endif
+    
     if (!file.is_open()) {
         return false;
     }
@@ -426,9 +456,14 @@ bool SocketServer::sendFileList(SOCKET clientSocket) {
         std::string fileList = "FILE_LIST:\n";
         
         if (std::filesystem::exists(m_fileDirectory)) {
-            for (const auto& entry : std::filesystem::directory_iterator(m_fileDirectory)) {
+            // 递归遍历所有文件，包括子目录
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(m_fileDirectory)) {
                 if (entry.is_regular_file()) {
-                    std::string filename = entry.path().filename().string();
+                    // 使用u8string()确保UTF-8编码正确
+                    std::filesystem::path relativePath = std::filesystem::relative(entry.path(), m_fileDirectory);
+                    std::string filename = relativePath.string();
+                    // 统一使用正斜杠作为路径分隔符
+                    std::replace(filename.begin(), filename.end(), '\\', '/');
                     size_t fileSize = entry.file_size();
                     fileList += filename + ":" + std::to_string(fileSize) + "\n";
                 }
@@ -464,6 +499,10 @@ std::string SocketServer::getFilePath(const std::string& filename) {
         safeName.erase(pos, 2);
     }
     
+    // Windows下将路径分隔符统一为斜杠（filesystem会自动处理）
+    // 这样可以更好地支持跨平台和UTF-8文件名
+    std::replace(safeName.begin(), safeName.end(), '\\', '/');
+    
     // 构造完整文件路径
     std::string fullPath = m_fileDirectory + "/" + safeName;
     
@@ -484,7 +523,14 @@ std::string SocketServer::getFilePath(const std::string& filename) {
 }
 
 bool SocketServer::receiveFileData(SOCKET clientSocket, const std::string& filepath, size_t fileSize) {
+    // Windows下使用宽字符路径确保UTF-8文件名正确处理
+#ifdef _WIN32
+    std::wstring wpath = utf8ToWide(filepath);
+    std::ofstream file(wpath, std::ios::binary);
+#else
     std::ofstream file(filepath, std::ios::binary);
+#endif
+    
     if (!file.is_open()) {
         logError("Failed to create file: " + filepath);
         return false;
@@ -501,7 +547,11 @@ bool SocketServer::receiveFileData(SOCKET clientSocket, const std::string& filep
         if (bytesReceived <= 0) {
             logError("Failed to receive file data");
             file.close();
+#ifdef _WIN32
+            std::filesystem::remove(wpath);
+#else
             std::filesystem::remove(filepath);
+#endif
             return false;
         }
         
@@ -520,7 +570,14 @@ bool SocketServer::receiveFileData(SOCKET clientSocket, const std::string& filep
 }
 
 bool SocketServer::sendFileData(SOCKET clientSocket, const std::string& filepath) {
+    // Windows下使用宽字符路径确保UTF-8文件名正确处理
+#ifdef _WIN32
+    std::wstring wpath = utf8ToWide(filepath);
+    std::ifstream file(wpath, std::ios::binary);
+#else
     std::ifstream file(filepath, std::ios::binary);
+#endif
+    
     if (!file.is_open()) {
         logError("Failed to open file: " + filepath);
         return false;

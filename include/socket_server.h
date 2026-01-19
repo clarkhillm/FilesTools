@@ -3,6 +3,7 @@
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
+    #include <windows.h>
     #pragma comment(lib, "ws2_32.lib")
     typedef int socklen_t;
 #else
@@ -77,6 +78,12 @@ private:
     std::string getFilePath(const std::string& filename);
     bool receiveFileData(SOCKET clientSocket, const std::string& filepath, size_t fileSize);
     bool sendFileData(SOCKET clientSocket, const std::string& filepath);
+    
+#ifdef _WIN32
+    // Windows下的UTF-8路径转换辅助函数
+    std::wstring utf8ToWide(const std::string& utf8str);
+    std::string wideToUtf8(const std::wstring& wstr);
+#endif
 
     int m_port;
     SOCKET m_serverSocket;

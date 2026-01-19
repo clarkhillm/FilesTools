@@ -8,7 +8,22 @@
     #include <spdlog/spdlog.h>
 #endif
 
+#ifdef _WIN32
+    #include <windows.h>
+#endif
+
 int main() {
+#ifdef _WIN32
+    // 设置控制台代码页为UTF-8
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    // 启用虚拟终端处理以支持ANSI转义序列（彩色输出）
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD dwMode = 0;
+    GetConsoleMode(hOut, &dwMode);
+    dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    SetConsoleMode(hOut, dwMode);
+#endif
 #ifdef USE_SPDLOG
     // 设置全局日志级别
     spdlog::set_level(spdlog::level::info);

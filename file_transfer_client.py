@@ -19,12 +19,17 @@ class ProxyRequest:
     """代理请求结构 - 对应C++的ProxyRequest"""
     def __init__(self, target_ip, target_port):
         # 确保IP地址是16字节，不足的用空字符填充
-        self.target_ip = target_ip.ljust(16, '\0')[:16]
+        ip_bytes = target_ip.encode('utf-8')
+        if len(ip_bytes) > 16:
+            ip_bytes = ip_bytes[:16]
+        else:
+            ip_bytes = ip_bytes + b'\0' * (16 - len(ip_bytes))
+        self.target_ip = ip_bytes
         self.target_port = target_port
     
     def pack(self):
         """打包为二进制数据发送给代理"""
-        return struct.pack('16sH', self.target_ip.encode('utf-8'), self.target_port)
+        return struct.pack('16sH', self.target_ip, self.target_port)
 
 class ProxyResponse:
     """代理响应结构 - 对应C++的ProxyResponse"""
@@ -53,6 +58,7 @@ class FileTransferClient:
         """连接到服务器（直接连接或通过代理）"""
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(30)  # 设置30秒超时，避免无限等待
             
             if self.using_proxy:
                 return self._connect_via_proxy()
@@ -236,9 +242,13 @@ class FileTransferClient:
             print(f"📊 发现 {len(files_to_upload)} 个文件，总大小: {total_size} bytes")
             
             # 询问用户确认
-            response = input(f"确认上传文件夹 '{folder_name}' 吗? (y/N): ").strip().lower()
-            if response not in ['y', 'yes', '是']:
-                print("❌ 用户取消上传")
+            try:
+                response = input(f"确认上传文件夹 '{folder_name}' 吗? (y/N): ").strip().lower()
+                if response not in ['y', 'yes', '是']:
+                    print("❌ 用户取消上传")
+                    return False
+            except (EOFError, KeyboardInterrupt):
+                print("\n❌ 用户取消上传")
                 return False
             
             # 上传所有文件
